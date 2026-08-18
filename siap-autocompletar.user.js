@@ -164,7 +164,7 @@
   // ---------- UI ----------
   GM_addStyle(`
     #siap-panel {
-      position: fixed; top: 80px; right: 20px; width: 270px;
+      position: fixed; bottom: 20px; left: 100px; width: 280px;
       background: #fff; border: 2px solid #17a2b8; border-radius: 10px;
       box-shadow: 0 4px 14px rgba(0,0,0,.25); font-family: Arial, sans-serif;
       font-size: 13px; z-index: 999999; padding: 12px; color: #222;
@@ -337,6 +337,7 @@
       panel.style.left = (e.clientX - offX) + 'px';
       panel.style.top = (e.clientY - offY) + 'px';
       panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
     });
     document.addEventListener('mouseup', () => (dragging = false));
   })();
