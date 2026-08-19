@@ -43,6 +43,7 @@
   // ======================================================
   const FIRST_IDS = {
     lote: 'TXT_NUM_LOTE',
+    fecha: 'TXT_FEC_PRO',
     estado: 'CMB_ESTADO',
     producto: 'CMB_PROD',
     presenta: 'TXT_PRESENTA',
@@ -54,6 +55,7 @@
 
   const CLONE_ORIGINS = {
     lote: 'TXT_DIN_LOTE',
+    fecha: 'TXT_FEC_DIN',
     estado: 'CMB_DYNAMIC',
     producto: 'CMB_DIN_PROD',
     presenta: 'CMB_DIN_PRES',
@@ -79,6 +81,18 @@
   }
 
   // ---------- Helpers para setear valores respetando frameworks basados en eventos ----------
+  function fireChangeEvents(el) {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('keyup', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
+    // Algunos sitios enganchan sus cascades vía jQuery (.on/.live/.delegate).
+    // Si jQuery está presente, disparamos también su propio evento 'change'.
+    if (window.jQuery) {
+      try { window.jQuery(el).trigger('change').trigger('input'); } catch (e) { /* noop */ }
+    }
+  }
+
   function setNativeValue(element, value) {
     const proto = Object.getPrototypeOf(element);
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -87,10 +101,7 @@
     } else {
       element.value = value;
     }
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('keyup', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    fireChangeEvents(element);
   }
 
   function setSelectByText(select, text) {
@@ -99,8 +110,7 @@
     );
     if (!target) return false;
     select.value = target.value;
-    select.dispatchEvent(new Event('input', { bubbles: true }));
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    fireChangeEvents(select);
     return true;
   }
 
@@ -164,7 +174,7 @@
   // ---------- UI ----------
   GM_addStyle(`
     #siap-panel {
-      position: fixed; bottom: 20px; left: 100px; width: 280px;
+      position: fixed; bottom: 20px; left: 20px; width: 270px;
       background: #fff; border: 2px solid #17a2b8; border-radius: 10px;
       box-shadow: 0 4px 14px rgba(0,0,0,.25); font-family: Arial, sans-serif;
       font-size: 13px; z-index: 999999; padding: 12px; color: #222;
@@ -185,6 +195,12 @@
     #siap-btn-clear { background: #aaa; font-weight: normal; font-size: 11px; padding: 5px; }
     #siap-msg { margin-top:6px; font-size:12px; min-height:14px; }
     #siap-fecha-note { margin-top:8px; font-size:11px; color:#b02a00; }
+    .siap-highlight { outline: 3px solid #ff4d4f !important; animation: siap-pulse 1s ease-out 4; }
+    @keyframes siap-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255,77,79,.7); }
+      70% { box-shadow: 0 0 0 9px rgba(255,77,79,0); }
+      100% { box-shadow: 0 0 0 0 rgba(255,77,79,0); }
+    }
   `);
 
   async function init() {
@@ -250,13 +266,32 @@
 
   document.getElementById('siap-btn-clear').addEventListener('click', clearState);
 
-  function showMsg(text, ok) {
+  let currentMsgs = [];
+  function resetMsgs() {
+    currentMsgs = [];
+    renderMsgs();
+  }
+  function renderMsgs() {
     const el = document.getElementById('siap-msg');
-    el.textContent = text;
-    el.style.color = ok ? '#198754' : '#b02a00';
+    el.innerHTML = currentMsgs
+      .map((m) => `<div style="color:${m.ok ? '#198754' : '#b02a00'}">${m.text}</div>`)
+      .join('');
+  }
+  function showMsg(text, ok) {
+    currentMsgs.push({ text, ok });
+    renderMsgs();
   }
 
-  async function fillCommonFields(which) {
+  function highlightField(el) {
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('siap-highlight');
+    void el.offsetWidth; // reinicia la animación si ya se había aplicado antes
+    el.classList.add('siap-highlight');
+    setTimeout(() => el.classList.remove('siap-highlight'), 4000);
+  }
+
+  async function fillCommonFields(which, nombreProd) {
     const lote = document.getElementById('siap-lote').value.trim();
     const loteInput = getField('lote', which);
     if (lote && loteInput) setNativeValue(loteInput, lote);
@@ -264,13 +299,19 @@
     try {
       await waitForOptionText('estado', which, 'HARINAS, BALANCEADOS Y RESIDUOS', 4000);
     } catch (e) {
-      showMsg('No se pudo seleccionar "Categoría/Estado" a tiempo, hazlo a mano.', false);
+      showMsg('⚠ No se pudo seleccionar "Categoría/Estado" a tiempo, hazlo a mano.', false);
+    }
+
+    try {
+      await waitForOptionText('producto', which, nombreProd, 5000);
+    } catch (e) {
+      showMsg(`⚠ No cargó "Producto" a tiempo: selecciona a mano "${nombreProd}".`, false);
     }
 
     try {
       await waitForOptionText('presenta', which, 'Al Granel', 5000);
     } catch (e) {
-      showMsg('No cargó "Presentación" a tiempo: selecciónala a mano (Al Granel).', false);
+      showMsg('⚠ No cargó "Presentación" a tiempo: selecciónala a mano (Al Granel).', false);
     }
 
     const pesoN = getField('pesoNeto', which);
@@ -280,6 +321,7 @@
   }
 
   async function fillProducto(tipo) {
+    resetMsgs();
     const peso = parsePeso(document.getElementById('siap-peso').value);
     const rh = parseFloat(document.getElementById('siap-rend-h').value);
     const ra = parseFloat(document.getElementById('siap-rend-a').value);
@@ -292,8 +334,6 @@
       return showMsg('Aún no existe la 2ª tarjeta. Haz clic primero en "Agregar Nuevo Producto" en la página.', false);
     }
 
-    await fillCommonFields(which);
-
     let cantidad, nombreProd, descripcion;
     if (tipo === 'harina') {
       cantidad = calcCantidad(peso, rh);
@@ -305,19 +345,17 @@
       descripcion = 'PROCESAMIENTO DE ACEITE DE PESCADO';
     }
 
-    try {
-      await waitForOptionText('producto', which, nombreProd, 5000);
-    } catch (e) {
-      showMsg(`No cargó "Producto" a tiempo: selecciona a mano "${nombreProd}".`, false);
-    }
+    await fillCommonFields(which, nombreProd);
 
     const descField = getField('descripcion', which);
     const cantField = getField('cantidad', which);
     if (descField) setNativeValue(descField, descripcion);
     if (cantField) setNativeValue(cantField, String(cantidad));
 
+    highlightField(getField('fecha', which));
+
     saveState();
-    showMsg(`Listo: ${nombreProd} (${which === 'first' ? '1ª' : '2ª'} tarjeta) → Cantidad Producida = ${cantidad}. Revisa y envía tú mismo.`, true);
+    showMsg(`✅ Listo: ${nombreProd} (${which === 'first' ? '1ª' : '2ª'} tarjeta) → Cantidad Producida = ${cantidad}. Falta la fecha (resaltada) y revisar antes de enviar.`, true);
   }
 
   document.getElementById('siap-btn-harina').addEventListener('click', () => fillProducto('harina'));
