@@ -31,9 +31,16 @@
   // ======================================================
   //  CONFIGURACIÓN - EDITA AQUÍ LOS VALORES QUE CAMBIAN POCO
   // ======================================================
-  const LOTE_DEFAULT = 'S0100726';   // <-- cambia este valor cuando cambie el N° de Lote
-  const DEFAULT_REND_HARINA = 38.80; // % - rendimiento de harina (celda B33 del Excel)
-  const DEFAULT_REND_ACEITE = 4.31;  // % - rendimiento de aceite (celda B34 del Excel)
+  const LOTE_DEFAULT = 'S0200426'; // <-- cambia este valor cuando cambie el N° de Lote
+
+  // Estos 3 totales son los mismos que B30 (Total Harina), B31 (Total Aceite) y
+  // B32 (Total Materia Prima) de tu Excel. El rendimiento se calcula a partir de
+  // ellos exactamente igual que las fórmulas =+B30/B32 y =+B31/B32, así el
+  // resultado siempre coincide con Excel al 100%, sin errores de redondeo.
+  // Actualiza estos 3 valores cuando cambien los totales del periodo (mensual).
+  const TOTAL_HARINA_DEFAULT = 867867;
+  const TOTAL_ACEITE_DEFAULT = 96420;
+  const TOTAL_MP_DEFAULT = 2236792;
 
   // ======================================================
   //  MAPA DE CAMPOS
@@ -141,32 +148,39 @@
     return parseFloat(str.toString().trim().replace(',', '.'));
   }
 
-  function calcCantidad(pesoTotal, rendimientoPercent) {
-    return Math.trunc(pesoTotal * (rendimientoPercent / 100));
+  function calcCantidad(pesoTotal, rendimientoFraccion) {
+    const raw = pesoTotal * rendimientoFraccion;
+    // Excel redondea el resultado a 2 decimales al mostrarlo en la celda,
+    // y recién sobre ESE número redondeado se trunca el entero para el formulario web.
+    const roundedTo2 = Math.round(raw * 100) / 100;
+    return Math.trunc(roundedTo2);
   }
 
   // ---------- Persistencia entre recargas ----------
-  const STORE_KEYS = { lote: 'siap_lote', peso: 'siap_peso', rh: 'siap_rend_harina', ra: 'siap_rend_aceite' };
+  const STORE_KEYS = { lote: 'siap_lote', peso: 'siap_peso', th: 'siap_total_harina', ta: 'siap_total_aceite', tmp: 'siap_total_mp' };
 
   function saveState() {
     GM_setValue(STORE_KEYS.lote, document.getElementById('siap-lote').value);
     GM_setValue(STORE_KEYS.peso, document.getElementById('siap-peso').value);
-    GM_setValue(STORE_KEYS.rh, document.getElementById('siap-rend-h').value);
-    GM_setValue(STORE_KEYS.ra, document.getElementById('siap-rend-a').value);
+    GM_setValue(STORE_KEYS.th, document.getElementById('siap-total-h').value);
+    GM_setValue(STORE_KEYS.ta, document.getElementById('siap-total-a').value);
+    GM_setValue(STORE_KEYS.tmp, document.getElementById('siap-total-mp').value);
   }
 
   function loadState() {
     document.getElementById('siap-lote').value = GM_getValue(STORE_KEYS.lote, LOTE_DEFAULT);
     document.getElementById('siap-peso').value = GM_getValue(STORE_KEYS.peso, '');
-    document.getElementById('siap-rend-h').value = GM_getValue(STORE_KEYS.rh, DEFAULT_REND_HARINA);
-    document.getElementById('siap-rend-a').value = GM_getValue(STORE_KEYS.ra, DEFAULT_REND_ACEITE);
+    document.getElementById('siap-total-h').value = GM_getValue(STORE_KEYS.th, TOTAL_HARINA_DEFAULT);
+    document.getElementById('siap-total-a').value = GM_getValue(STORE_KEYS.ta, TOTAL_ACEITE_DEFAULT);
+    document.getElementById('siap-total-mp').value = GM_getValue(STORE_KEYS.tmp, TOTAL_MP_DEFAULT);
   }
 
   function clearState() {
     GM_setValue(STORE_KEYS.lote, LOTE_DEFAULT);
     GM_setValue(STORE_KEYS.peso, '');
-    GM_setValue(STORE_KEYS.rh, DEFAULT_REND_HARINA);
-    GM_setValue(STORE_KEYS.ra, DEFAULT_REND_ACEITE);
+    GM_setValue(STORE_KEYS.th, TOTAL_HARINA_DEFAULT);
+    GM_setValue(STORE_KEYS.ta, TOTAL_ACEITE_DEFAULT);
+    GM_setValue(STORE_KEYS.tmp, TOTAL_MP_DEFAULT);
     loadState();
     updatePreview();
   }
@@ -190,6 +204,7 @@
       width: 100%; margin-top: 8px; padding: 7px; border: none; border-radius: 6px;
       color: #fff; font-weight: bold; cursor: pointer;
     }
+    .siap-total-amounts { color: #00fff; }
     #siap-btn-harina { background: #e0a800; }
     #siap-btn-aceite { background: #17a2b8; }
     #siap-btn-clear { background: #aaa; font-weight: normal; font-size: 11px; padding: 5px; }
@@ -217,19 +232,21 @@
     <label>N° Lote Procesado</label>
     <input id="siap-lote" type="text" placeholder="Ej. S0100726">
 
-    <label>Peso Total (E31)</label>
+    <label>Peso Total</label>
     <input id="siap-peso" type="text" placeholder="Ej. 1090,32">
 
     <div class="rend-row">
-      <div>
-        <label>% Rend. Harina</label>
-        <input id="siap-rend-h" type="text">
+      <div class="siap-total-amounts">
+        <label>Total Harina</label>
+        <input id="siap-total-h" type="text">
       </div>
-      <div>
-        <label>% Rend. Aceite</label>
-        <input id="siap-rend-a" type="text">
+      <div class="siap-total-amounts">
+        <label>Total Aceite</label>
+        <input id="siap-total-a" type="text">
       </div>
     </div>
+    <label>Total Materia Prima</label>
+    <input id="siap-total-mp" type="text">
 
     <div id="siap-preview">Cantidad Harina: <b id="siap-prev-h">-</b><br>Cantidad Aceite: <b id="siap-prev-a">-</b></div>
 
@@ -244,20 +261,21 @@
 
   function updatePreview() {
     const peso = parsePeso(document.getElementById('siap-peso').value);
-    const rh = parseFloat(document.getElementById('siap-rend-h').value);
-    const ra = parseFloat(document.getElementById('siap-rend-a').value);
+    const th = parseFloat(document.getElementById('siap-total-h').value);
+    const ta = parseFloat(document.getElementById('siap-total-a').value);
+    const tmp = parseFloat(document.getElementById('siap-total-mp').value);
     const prevH = document.getElementById('siap-prev-h');
     const prevA = document.getElementById('siap-prev-a');
-    if (!isNaN(peso) && !isNaN(rh) && !isNaN(ra)) {
-      prevH.textContent = calcCantidad(peso, rh);
-      prevA.textContent = calcCantidad(peso, ra);
+    if (!isNaN(peso) && !isNaN(th) && !isNaN(ta) && !isNaN(tmp) && tmp !== 0) {
+      prevH.textContent = calcCantidad(peso, th / tmp);
+      prevA.textContent = calcCantidad(peso, ta / tmp);
     } else {
       prevH.textContent = '-';
       prevA.textContent = '-';
     }
   }
 
-  ['siap-peso', 'siap-rend-h', 'siap-rend-a', 'siap-lote'].forEach((id) => {
+  ['siap-peso', 'siap-total-h', 'siap-total-a', 'siap-total-mp', 'siap-lote'].forEach((id) => {
     document.getElementById(id).addEventListener('input', () => {
       updatePreview();
       saveState();
@@ -323,10 +341,14 @@
   async function fillProducto(tipo) {
     resetMsgs();
     const peso = parsePeso(document.getElementById('siap-peso').value);
-    const rh = parseFloat(document.getElementById('siap-rend-h').value);
-    const ra = parseFloat(document.getElementById('siap-rend-a').value);
+    const th = parseFloat(document.getElementById('siap-total-h').value);
+    const ta = parseFloat(document.getElementById('siap-total-a').value);
+    const tmp = parseFloat(document.getElementById('siap-total-mp').value);
 
     if (isNaN(peso)) return showMsg('Ingresa el Peso Total primero.', false);
+    if (isNaN(th) || isNaN(ta) || isNaN(tmp) || tmp === 0) {
+      return showMsg('Revisa los 3 totales (Harina/Aceite/Materia Prima).', false);
+    }
 
     const which = tipo === 'harina' ? 'first' : 'last';
 
@@ -336,11 +358,11 @@
 
     let cantidad, nombreProd, descripcion;
     if (tipo === 'harina') {
-      cantidad = calcCantidad(peso, rh);
+      cantidad = calcCantidad(peso, th / tmp);
       nombreProd = 'Harina de Pescado';
       descripcion = 'PROCESAMIENTO DE HARINA DE PESCADO';
     } else {
-      cantidad = calcCantidad(peso, ra);
+      cantidad = calcCantidad(peso, ta / tmp);
       nombreProd = 'Aceite de Pescado';
       descripcion = 'PROCESAMIENTO DE ACEITE DE PESCADO';
     }
